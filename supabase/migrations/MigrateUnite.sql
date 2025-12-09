@@ -31,12 +31,13 @@ CREATE TABLE public.profiles (
 );
 
 -- Create user_roles table (multi-role support)
-CREATE TABLE public.user_roles (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
-  role app_role NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE (user_id, role)
+CREATE TABLE public.profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name TEXT NOT NULL,
+  phone TEXT,
+  avatar_url TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Create worker profiles table
@@ -82,12 +83,78 @@ CREATE TABLE public.ratings (
                                 UNIQUE(job_id)
 );
 
+-- Create conversations table
+CREATE TABLE conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  last_message_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE conversation_participants (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  joined_at TIMESTAMPTZ DEFAULT now(),
+  last_read_at TIMESTAMPTZ,
+  UNIQUE(conversation_id, user_id)
+);
+
+-- Create messages table
+CREATE TABLE messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  is_read BOOLEAN DEFAULT false
+);
+
 -- Enable RLS
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.worker_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.job_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ratings ENABLE ROW LEVEL SECURITY;
+
+-- Enable RLS on messaging tables
+ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversation_participants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+
+-- Create storage bucket for avatars
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('avatars', 'avatars', true);
+
+-- Storage policies for avatars
+CREATE POLICY "Avatar images are publicly accessible"
+  ON storage.objects
+  FOR SELECT
+  USING (bucket_id = 'avatars');
+
+CREATE POLICY "Users can upload their own avatar"
+  ON storage.objects
+  FOR INSERT
+  WITH CHECK (
+    bucket_id = 'avatars' AND
+    auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+CREATE POLICY "Users can update their own avatar"
+  ON storage.objects
+  FOR UPDATE
+  USING (
+    bucket_id = 'avatars' AND
+    auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+CREATE POLICY "Users can delete their own avatar"
+  ON storage.objects
+  FOR DELETE
+  USING (
+    bucket_id = 'avatars' AND
+    auth.uid()::text = (storage.foldername(name))[1]
+  );
 
 -- Profiles policies
 CREATE POLICY "Users can view all profiles"
@@ -102,7 +169,7 @@ CREATE POLICY "Users can insert own profile"
   ON public.profiles FOR INSERT
   WITH CHECK (auth.uid() = id);
 
--- User roles policies (NEW)
+-- User roles policies
 CREATE POLICY "Users can view their own roles"
   ON public.user_roles FOR SELECT
   USING (auth.uid() = user_id);
@@ -169,6 +236,123 @@ CREATE POLICY "Contractors can create ratings"
       AND job_requests.status = 'completed'
     )
   );
+
+-- RLS Policies for conversations
+CREATE POLICY "Users can view their own conversations"
+  ON conversations
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM conversation_participants
+      WHERE conversation_participants.conversation_id = conversations.id
+      AND conversation_participants.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can create conversations"
+  ON conversations
+  FOR INSERT
+  WITH CHECK (true);
+
+-- RLS Policies for conversation_participants
+CREATE POLICY "Users can view participants in their conversations"
+  ON conversation_participants
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM conversation_participants cp
+      WHERE cp.conversation_id = conversation_participants.conversation_id
+      AND cp.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can join conversations"
+  ON conversation_participants
+  FOR INSERT
+  WITH CHECK (true);
+
+CREATE POLICY "Users can update their own participant record"
+  ON conversation_participants
+  FOR UPDATE
+  USING (user_id = auth.uid());
+
+-- RLS Policies for conversation_participants
+CREATE POLICY "Users can view participants in their conversations"
+  ON conversation_participants
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM conversation_participants cp
+      WHERE cp.conversation_id = conversation_participants.conversation_id
+      AND cp.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can join conversations"
+  ON conversation_participants
+  FOR INSERT
+  WITH CHECK (true);
+
+CREATE POLICY "Users can update their own participant record"
+  ON conversation_participants
+  FOR UPDATE
+  USING (user_id = auth.uid());
+
+-- RLS Policies for messages
+CREATE POLICY "Users can view messages in their conversations"
+  ON messages
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM conversation_participants
+      WHERE conversation_participants.conversation_id = messages.conversation_id
+      AND conversation_participants.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can send messages in their conversations"
+  ON messages
+  FOR INSERT
+  WITH CHECK (
+    sender_id = auth.uid() AND
+    EXISTS (
+      SELECT 1 FROM conversation_participants
+      WHERE conversation_participants.conversation_id = messages.conversation_id
+      AND conversation_participants.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can update their own messages"
+  ON messages
+  FOR UPDATE
+  USING (sender_id = auth.uid());
+
+INSERT INTO conversations (id, created_at, updated_at, last_message_at)
+VALUES ('00000000-0000-0000-0000-000000000001', now(), now(), now())
+ON CONFLICT (id) DO NOTHING;
+
+-- Function to add new users to global conversation
+CREATE OR REPLACE FUNCTION public.add_user_to_global_chat()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  -- Add user to global conversation
+  INSERT INTO conversation_participants (conversation_id, user_id)
+  VALUES ('00000000-0000-0000-0000-000000000001', NEW.id)
+  ON CONFLICT (conversation_id, user_id) DO NOTHING;
+  
+  RETURN NEW;
+END;
+$$;
+
+-- Trigger to auto-add users to global chat when profile is created
+CREATE TRIGGER on_profile_created_add_to_global_chat
+  AFTER INSERT ON profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION public.add_user_to_global_chat();
 
 -- Create role checking function (NEW)
 CREATE OR REPLACE FUNCTION public.has_role(_user_id UUID, _role app_role)
@@ -274,3 +458,14 @@ CREATE TRIGGER set_updated_at_worker_profiles
 CREATE TRIGGER set_updated_at_job_requests
     BEFORE UPDATE ON public.job_requests
     FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+-- Enable Realtime for messaging tables
+ALTER PUBLICATION supabase_realtime ADD TABLE messages;
+ALTER PUBLICATION supabase_realtime ADD TABLE conversations;
+ALTER PUBLICATION supabase_realtime ADD TABLE conversation_participants;
+
+-- Add all existing users to global conversation
+INSERT INTO conversation_participants (conversation_id, user_id)
+SELECT '00000000-0000-0000-0000-000000000001', id
+FROM profiles
+ON CONFLICT (conversation_id, user_id) DO NOTHING;
