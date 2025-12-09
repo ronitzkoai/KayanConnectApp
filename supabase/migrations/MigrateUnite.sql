@@ -2,7 +2,7 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Create app_role enum (replaces old user_role enum)
-CREATE TYPE public.app_role AS ENUM ('contractor', 'worker', 'admin');
+CREATE TYPE public.app_role AS ENUM ('contractor', 'worker', 'admin', 'customer');
 
 -- Create work types enum
 CREATE TYPE work_type AS ENUM (
@@ -21,16 +21,22 @@ CREATE TYPE urgency_level AS ENUM ('low', 'medium', 'high', 'urgent');
 -- Create job status enum
 CREATE TYPE job_status AS ENUM ('open', 'accepted', 'completed', 'cancelled');
 
--- Create profiles table (no role column - moved to user_roles)
-CREATE TABLE public.profiles (
-  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  full_name TEXT NOT NULL,
-  phone TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+-- Create service type enum
+CREATE TYPE service_type AS ENUM ('operator_with_equipment', 'equipment_only', 'operator_only');
 
--- Create user_roles table (multi-role support)
+-- Create enum for fuel type
+CREATE TYPE public.fuel_type AS ENUM ('diesel', 'gasoline');
+
+-- Create enum for fuel order status
+CREATE TYPE public.fuel_order_status AS ENUM ('pending', 'confirmed', 'delivered', 'cancelled');
+
+-- Create enum for maintenance type
+CREATE TYPE public.maintenance_type AS ENUM ('oil_change', 'tire_change', 'filter_change', 'general_service', 'repair');
+
+-- Create enum for maintenance status
+CREATE TYPE public.maintenance_status AS ENUM ('scheduled', 'in_progress', 'completed', 'overdue');
+
+-- Create profiles table (no role column - moved to user_roles)
 CREATE TABLE public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   full_name TEXT NOT NULL,
@@ -38,6 +44,15 @@ CREATE TABLE public.profiles (
   avatar_url TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create user_roles table (multi-role support)
+CREATE TABLE public.user_roles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  role app_role NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (user_id, role)
 );
 
 -- Create worker profiles table
@@ -51,9 +66,87 @@ CREATE TABLE public.worker_profiles (
                                         is_verified BOOLEAN DEFAULT false,
                                         rating DECIMAL(3,2) DEFAULT 0,
                                         total_ratings INTEGER DEFAULT 0,
+                                        owned_equipment TEXT[] DEFAULT '{}',
+                                        equipment_skills TEXT[] DEFAULT '{}',
                                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                                         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                                         UNIQUE(user_id)
+);
+
+-- Create contractor profiles table
+CREATE TABLE public.contractor_profiles (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+  license_type text,
+  license_number text,
+  specializations text[] DEFAULT '{}',
+  years_experience integer DEFAULT 0,
+  company_name text,
+  service_areas text[] DEFAULT '{}',
+  is_verified boolean DEFAULT false,
+  rating numeric DEFAULT 0,
+  total_ratings integer DEFAULT 0,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now()
+);
+
+-- Create customer profiles table
+CREATE TABLE public.customer_profiles (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+  city text,
+  address text,
+  project_description text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now()
+);
+
+-- Create fuel_orders table
+CREATE TABLE public.fuel_orders (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  contractor_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  fuel_type fuel_type NOT NULL DEFAULT 'diesel',
+  quantity NUMERIC NOT NULL CHECK (quantity > 0),
+  equipment_type TEXT,
+  equipment_name TEXT,
+  location TEXT NOT NULL,
+  delivery_date TIMESTAMP WITH TIME ZONE NOT NULL,
+  status fuel_order_status NOT NULL DEFAULT 'pending',
+  notes TEXT,
+  price NUMERIC,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+-- Create equipment_maintenance table
+CREATE TABLE public.equipment_maintenance (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  contractor_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  equipment_type TEXT NOT NULL,
+  equipment_name TEXT,
+  maintenance_type maintenance_type NOT NULL,
+  scheduled_date TIMESTAMP WITH TIME ZONE NOT NULL,
+  completed_date TIMESTAMP WITH TIME ZONE,
+  status maintenance_status NOT NULL DEFAULT 'scheduled',
+  cost NUMERIC,
+  notes TEXT,
+  mileage_hours INTEGER,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+-- Create subscriptions table
+CREATE TABLE public.subscriptions (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL,
+  plan_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'trial',
+  trial_ends_at TIMESTAMP WITH TIME ZONE,
+  current_period_start TIMESTAMP WITH TIME ZONE,
+  current_period_end TIMESTAMP WITH TIME ZONE,
+  amount NUMERIC NOT NULL DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 
 -- Create job requests table
@@ -64,6 +157,7 @@ CREATE TABLE public.job_requests (
                                      location TEXT NOT NULL,
                                      work_date TIMESTAMP WITH TIME ZONE NOT NULL,
                                      urgency urgency_level DEFAULT 'medium',
+                                     service_type service_type DEFAULT 'operator_with_equipment' NOT NULL,
                                      notes TEXT,
                                      status job_status DEFAULT 'open',
                                      accepted_by UUID REFERENCES public.worker_profiles(id) ON DELETE SET NULL,
@@ -114,6 +208,11 @@ CREATE TABLE messages (
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.worker_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contractor_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.customer_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fuel_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.equipment_maintenance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.job_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ratings ENABLE ROW LEVEL SECURITY;
 
@@ -197,6 +296,84 @@ CREATE POLICY "Workers can insert own profile"
     AND public.has_role(auth.uid(), 'worker')
   );
 
+-- Contractor profiles policies
+CREATE POLICY "Anyone can view contractor profiles"
+ON public.contractor_profiles FOR SELECT
+USING (true);
+
+CREATE POLICY "Contractors can insert own profile"
+ON public.contractor_profiles FOR INSERT
+WITH CHECK (auth.uid() = user_id AND has_role(auth.uid(), 'contractor'::app_role));
+
+CREATE POLICY "Contractors can update own profile"
+ON public.contractor_profiles FOR UPDATE
+USING (auth.uid() = user_id AND has_role(auth.uid(), 'contractor'::app_role));
+
+-- Customer profiles policies
+CREATE POLICY "Anyone can view customer profiles"
+ON public.customer_profiles FOR SELECT
+USING (true);
+
+CREATE POLICY "Customers can insert own profile"
+ON public.customer_profiles FOR INSERT
+WITH CHECK (auth.uid() = user_id AND has_role(auth.uid(), 'customer'::app_role));
+
+CREATE POLICY "Customers can update own profile"
+ON public.customer_profiles FOR UPDATE
+USING (auth.uid() = user_id AND has_role(auth.uid(), 'customer'::app_role));
+
+-- RLS policies for fuel_orders
+CREATE POLICY "Contractors can view their fuel orders"
+ON public.fuel_orders FOR SELECT
+USING (contractor_id = auth.uid());
+
+CREATE POLICY "Contractors can create fuel orders"
+ON public.fuel_orders FOR INSERT
+WITH CHECK (contractor_id = auth.uid() AND has_role(auth.uid(), 'contractor'::app_role));
+
+CREATE POLICY "Contractors can update their fuel orders"
+ON public.fuel_orders FOR UPDATE
+USING (contractor_id = auth.uid());
+
+CREATE POLICY "Contractors can delete their fuel orders"
+ON public.fuel_orders FOR DELETE
+USING (contractor_id = auth.uid());
+
+-- RLS policies for equipment_maintenance
+CREATE POLICY "Contractors can view their maintenance records"
+ON public.equipment_maintenance FOR SELECT
+USING (contractor_id = auth.uid());
+
+CREATE POLICY "Contractors can create maintenance records"
+ON public.equipment_maintenance FOR INSERT
+WITH CHECK (contractor_id = auth.uid() AND has_role(auth.uid(), 'contractor'::app_role));
+
+CREATE POLICY "Contractors can update their maintenance records"
+ON public.equipment_maintenance FOR UPDATE
+USING (contractor_id = auth.uid());
+
+CREATE POLICY "Contractors can delete their maintenance records"
+ON public.equipment_maintenance FOR DELETE
+USING (contractor_id = auth.uid());
+
+-- Users can view their own subscription
+CREATE POLICY "Users can view their own subscription"
+ON public.subscriptions
+FOR SELECT
+USING (auth.uid() = user_id);
+
+-- Users can create their own subscription
+CREATE POLICY "Users can create their own subscription"
+ON public.subscriptions
+FOR INSERT
+WITH CHECK (auth.uid() = user_id);
+
+-- Users can update their own subscription
+CREATE POLICY "Users can update their own subscription"
+ON public.subscriptions
+FOR UPDATE
+USING (auth.uid() = user_id);
+
 -- Job requests policies
 CREATE POLICY "Anyone can view job requests"
   ON public.job_requests FOR SELECT
@@ -256,37 +433,11 @@ CREATE POLICY "Users can create conversations"
 
 -- RLS Policies for conversation_participants
 CREATE POLICY "Users can view participants in their conversations"
-  ON conversation_participants
-  FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM conversation_participants cp
-      WHERE cp.conversation_id = conversation_participants.conversation_id
-      AND cp.user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Users can join conversations"
-  ON conversation_participants
-  FOR INSERT
-  WITH CHECK (true);
-
-CREATE POLICY "Users can update their own participant record"
-  ON conversation_participants
-  FOR UPDATE
-  USING (user_id = auth.uid());
-
--- RLS Policies for conversation_participants
-CREATE POLICY "Users can view participants in their conversations"
-  ON conversation_participants
-  FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM conversation_participants cp
-      WHERE cp.conversation_id = conversation_participants.conversation_id
-      AND cp.user_id = auth.uid()
-    )
-  );
+ON public.conversation_participants
+FOR SELECT
+USING (user_id = auth.uid() OR conversation_id IN (
+  SELECT conversation_id FROM public.conversation_participants WHERE user_id = auth.uid()
+));
 
 CREATE POLICY "Users can join conversations"
   ON conversation_participants
@@ -458,6 +609,29 @@ CREATE TRIGGER set_updated_at_worker_profiles
 CREATE TRIGGER set_updated_at_job_requests
     BEFORE UPDATE ON public.job_requests
     FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+CREATE TRIGGER update_contractor_profiles_updated_at
+BEFORE UPDATE ON public.contractor_profiles
+FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+CREATE TRIGGER update_customer_profiles_updated_at
+BEFORE UPDATE ON public.customer_profiles
+FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+CREATE TRIGGER update_fuel_orders_updated_at
+BEFORE UPDATE ON public.fuel_orders
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_updated_at();
+
+CREATE TRIGGER update_equipment_maintenance_updated_at
+BEFORE UPDATE ON public.equipment_maintenance
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_updated_at();
+
+CREATE TRIGGER update_subscriptions_updated_at
+BEFORE UPDATE ON public.subscriptions
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_updated_at();
 
 -- Enable Realtime for messaging tables
 ALTER PUBLICATION supabase_realtime ADD TABLE messages;
