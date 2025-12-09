@@ -1,0 +1,143 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* Modern Teal Palette - Inspired by Workyard */
+    --background: 0 0% 100%;  /* Pure white */
+    --foreground: 215 25% 15%;  /* Deep slate #1e293b */
+
+    --card: 0 0% 100%;  /* White cards */
+    --card-foreground: 215 25% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 25% 15%;
+
+    --primary: 173 58% 45%;  /* Teal #0d9488 */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 173 58% 50%;  /* Lighter teal #14b8a6 */
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 210 20% 96%;  /* Light gray #f8fafc */
+    --muted-foreground: 215 16% 47%;  /* Medium gray #64748b */
+
+    --accent: 173 58% 45%;  /* Teal accent */
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;  /* Red #ef4444 */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 32% 91%;  /* Light border #e2e8f0 */
+    --input: 214 32% 91%;
+    --ring: 173 58% 45%;
+
+    --radius: 0.75rem;
+
+    /* Status colors */
+    --success: 142 76% 36%;  /* Green #10b981 */
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;  /* Orange #f59e0b */
+    --warning-foreground: 0 0% 100%;
+    --info: 199 89% 48%;  /* Blue #0ea5e9 */
+    --info-foreground: 0 0% 100%;
+  }
+
+  .dark {
+    --background: 222 47% 11%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 14%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 14%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 173 58% 45%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 173 58% 50%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 173 58% 45%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 63% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --ring: 173 58% 45%;
+
+    --success: 142 76% 36%;
+    --warning: 38 92% 50%;
+    --info: 199 89% 48%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Assistant', 'Inter', sans-serif;
+    direction: rtl;
+    font-feature-settings: "kern" 1;
+    text-rendering: optimizeLegibility;
+  }
+
+  html {
+    direction: rtl;
+    scroll-behavior: smooth;
+  }
+  
+  /* Smooth transitions */
+  button, a, input, textarea, select {
+    @apply transition-all duration-500;
+  }
+  
+  /* Beautiful scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-muted rounded;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-primary/40 rounded hover:bg-primary/60;
+  }
+  
+  /* Selection colors */
+  ::selection {
+    @apply bg-primary/30 text-foreground;
+  }
+  
+  /* Focus styles */
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-background;
+  }
+  
+  /* Shimmer effect */
+  .animate-shimmer {
+    background-size: 200% 100%;
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.3) 50%,
+      transparent 100%
+    );
+  }
+}
