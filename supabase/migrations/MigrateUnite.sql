@@ -2,7 +2,7 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Create app_role enum (replaces old user_role enum)
-CREATE TYPE public.app_role AS ENUM ('contractor', 'worker', 'admin', 'customer');
+CREATE TYPE public.app_role AS ENUM ('contractor', 'worker', 'admin', 'customer', 'technician');
 
 -- Create work types enum
 CREATE TYPE work_type AS ENUM (
@@ -12,7 +12,16 @@ CREATE TYPE work_type AS ENUM (
   'grader',
   'truck_driver',
   'semi_trailer',
-  'laborer'
+  'laborer',
+  'mini_excavator',
+  'excavator',
+  'mini_backhoe',
+  'wheeled_backhoe',
+  'telescopic_loader',
+  'full_trailer',
+  'bathtub',
+  'double',
+  'flatbed'
 );
 
 -- Create urgency levels enum
@@ -68,6 +77,7 @@ CREATE TABLE public.worker_profiles (
                                         total_ratings INTEGER DEFAULT 0,
                                         owned_equipment TEXT[] DEFAULT '{}',
                                         equipment_skills TEXT[] DEFAULT '{}',
+                                        bio TEXT,
                                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                                         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                                         UNIQUE(user_id)
@@ -86,6 +96,11 @@ CREATE TABLE public.contractor_profiles (
   is_verified boolean DEFAULT false,
   rating numeric DEFAULT 0,
   total_ratings integer DEFAULT 0,
+  bio TEXT,
+  is_service_provider BOOLEAN DEFAULT false,
+  service_specializations TEXT[] DEFAULT '{}',
+  completed_services INTEGER DEFAULT 0,
+  portfolio_images TEXT[] DEFAULT '{}',
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now()
 );
@@ -268,6 +283,12 @@ CREATE POLICY "Users can insert own profile"
   ON public.profiles FOR INSERT
   WITH CHECK (auth.uid() = id);
 
+-- Admin oversight
+CREATE POLICY "Admin can view all profiles"
+ON public.profiles
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
+
 -- User roles policies
 CREATE POLICY "Users can view their own roles"
   ON public.user_roles FOR SELECT
@@ -276,6 +297,12 @@ CREATE POLICY "Users can view their own roles"
 CREATE POLICY "Users can insert their own roles during signup"
   ON public.user_roles FOR INSERT
   WITH CHECK (auth.uid() = user_id);
+
+-- Admin oversight
+CREATE POLICY "Admin can view all user roles"
+ON public.user_roles
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
 
 -- Worker profiles policies
 CREATE POLICY "Anyone can view worker profiles"
@@ -296,6 +323,17 @@ CREATE POLICY "Workers can insert own profile"
     AND public.has_role(auth.uid(), 'worker')
   );
 
+-- Admin oversight
+CREATE POLICY "Admin can view all worker profiles"
+ON public.worker_profiles
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE POLICY "Admin can update all worker profiles"
+ON public.worker_profiles
+FOR UPDATE
+USING (public.has_role(auth.uid(), 'admin'));
+
 -- Contractor profiles policies
 CREATE POLICY "Anyone can view contractor profiles"
 ON public.contractor_profiles FOR SELECT
@@ -309,6 +347,17 @@ CREATE POLICY "Contractors can update own profile"
 ON public.contractor_profiles FOR UPDATE
 USING (auth.uid() = user_id AND has_role(auth.uid(), 'contractor'::app_role));
 
+-- Admin oversight
+CREATE POLICY "Admin can view all contractor profiles"
+ON public.contractor_profiles
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE POLICY "Admin can update all contractor profiles"
+ON public.contractor_profiles
+FOR UPDATE
+USING (public.has_role(auth.uid(), 'admin'));
+
 -- Customer profiles policies
 CREATE POLICY "Anyone can view customer profiles"
 ON public.customer_profiles FOR SELECT
@@ -321,6 +370,75 @@ WITH CHECK (auth.uid() = user_id AND has_role(auth.uid(), 'customer'::app_role))
 CREATE POLICY "Customers can update own profile"
 ON public.customer_profiles FOR UPDATE
 USING (auth.uid() = user_id AND has_role(auth.uid(), 'customer'::app_role));
+
+-- Admin oversight
+CREATE POLICY "Admin can view all customer profiles"
+ON public.customer_profiles
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE POLICY "Admin can update all customer profiles"
+ON public.customer_profiles
+FOR UPDATE
+USING (public.has_role(auth.uid(), 'admin'));
+
+-- Create technician_profiles table for maintenance service providers
+CREATE TABLE public.technician_profiles (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+  specializations TEXT[] DEFAULT '{}'::text[],
+  years_experience INTEGER DEFAULT 0,
+  is_verified BOOLEAN DEFAULT false,
+  is_available BOOLEAN DEFAULT true,
+  rating NUMERIC(3,2) DEFAULT 0,
+  total_ratings INTEGER DEFAULT 0,
+  portfolio_images TEXT[] DEFAULT '{}'::text[],
+  bio TEXT,
+  location TEXT,
+  completed_services INTEGER DEFAULT 0,
+  phone TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+-- Enable RLS
+ALTER TABLE public.technician_profiles ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for technician_profiles
+CREATE POLICY "Anyone can view technician profiles"
+ON public.technician_profiles
+FOR SELECT
+USING (true);
+
+CREATE POLICY "Technicians can insert their own profile"
+ON public.technician_profiles
+FOR INSERT
+WITH CHECK (
+  user_id = auth.uid() AND
+  public.has_role(auth.uid(), 'technician')
+);
+
+CREATE POLICY "Technicians can update their own profile"
+ON public.technician_profiles
+FOR UPDATE
+USING (user_id = auth.uid());
+
+-- Admin oversight
+CREATE POLICY "Admin can view all technician profiles"
+ON public.technician_profiles
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE POLICY "Admin can update all technician profiles"
+ON public.technician_profiles
+FOR UPDATE
+USING (public.has_role(auth.uid(), 'admin'));
+
+-- Add updated_at trigger for technician_profiles
+CREATE TRIGGER update_technician_profiles_updated_at
+  BEFORE UPDATE ON public.technician_profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION public.update_updated_at_column();
 
 -- RLS policies for fuel_orders
 CREATE POLICY "Contractors can view their fuel orders"
@@ -339,6 +457,22 @@ CREATE POLICY "Contractors can delete their fuel orders"
 ON public.fuel_orders FOR DELETE
 USING (contractor_id = auth.uid());
 
+-- Admin oversight
+CREATE POLICY "Admin can view all fuel orders"
+ON public.fuel_orders
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE POLICY "Admin can update all fuel orders"
+ON public.fuel_orders
+FOR UPDATE
+USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE POLICY "Admin can delete fuel orders"
+ON public.fuel_orders
+FOR DELETE
+USING (public.has_role(auth.uid(), 'admin'));
+
 -- RLS policies for equipment_maintenance
 CREATE POLICY "Contractors can view their maintenance records"
 ON public.equipment_maintenance FOR SELECT
@@ -355,6 +489,157 @@ USING (contractor_id = auth.uid());
 CREATE POLICY "Contractors can delete their maintenance records"
 ON public.equipment_maintenance FOR DELETE
 USING (contractor_id = auth.uid());
+
+-- Create maintenance_requests table
+CREATE TABLE public.maintenance_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  contractor_id UUID NOT NULL,
+  equipment_type TEXT NOT NULL,
+  equipment_name TEXT,
+  maintenance_type TEXT NOT NULL,
+  description TEXT,
+  location TEXT NOT NULL,
+  preferred_date TIMESTAMP WITH TIME ZONE,
+  urgency TEXT DEFAULT 'medium',
+  status TEXT DEFAULT 'open',
+  budget_range TEXT,
+  images TEXT[] DEFAULT '{}',
+  manufacturer TEXT,
+  model TEXT,
+  serial_number TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Enable RLS
+ALTER TABLE public.maintenance_requests ENABLE ROW LEVEL SECURITY;
+
+-- RLS policies for maintenance_requests
+CREATE POLICY "Anyone can view open maintenance requests"
+ON maintenance_requests FOR SELECT
+TO authenticated
+USING (status = 'open' OR contractor_id = auth.uid());
+
+CREATE POLICY "Contractors can create maintenance requests"
+ON maintenance_requests FOR INSERT
+TO authenticated
+WITH CHECK (contractor_id = auth.uid() AND has_role(auth.uid(), 'contractor'));
+
+CREATE POLICY "Contractors can update their requests"
+ON maintenance_requests FOR UPDATE
+TO authenticated
+USING (contractor_id = auth.uid());
+
+CREATE POLICY "Contractors can delete their requests"
+ON maintenance_requests FOR DELETE
+TO authenticated
+USING (contractor_id = auth.uid());
+
+-- Admin oversight
+CREATE POLICY "Admin can view all maintenance requests"
+ON public.maintenance_requests
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE POLICY "Admin can update all maintenance requests"
+ON public.maintenance_requests
+FOR UPDATE
+USING (public.has_role(auth.uid(), 'admin'));
+
+-- Create maintenance_quotes table
+CREATE TABLE public.maintenance_quotes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id UUID NOT NULL REFERENCES maintenance_requests(id) ON DELETE CASCADE,
+  provider_id UUID NOT NULL,
+  price NUMERIC NOT NULL,
+  estimated_duration TEXT,
+  description TEXT,
+  availability TEXT,
+  status TEXT DEFAULT 'pending',
+  arrival_time TEXT,
+  details_pdf_url TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Enable RLS
+ALTER TABLE public.maintenance_quotes ENABLE ROW LEVEL SECURITY;
+
+-- RLS policies for maintenance_quotes
+CREATE POLICY "Request owners can view quotes"
+ON maintenance_quotes FOR SELECT
+TO authenticated
+USING (
+  provider_id = auth.uid() OR
+  EXISTS (
+    SELECT 1 FROM maintenance_requests mr
+    WHERE mr.id = maintenance_quotes.request_id
+    AND mr.contractor_id = auth.uid()
+  )
+);
+
+CREATE POLICY "Users can submit quotes"
+ON maintenance_quotes FOR INSERT
+TO authenticated
+WITH CHECK (provider_id = auth.uid());
+
+CREATE POLICY "Providers can update their quotes"
+ON maintenance_quotes FOR UPDATE
+TO authenticated
+USING (provider_id = auth.uid());
+
+CREATE POLICY "Request owners can update quote status"
+ON maintenance_quotes FOR UPDATE
+TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM maintenance_requests mr
+    WHERE mr.id = maintenance_quotes.request_id
+    AND mr.contractor_id = auth.uid()
+  )
+);
+
+CREATE POLICY "Providers can delete their pending quotes"
+ON maintenance_quotes FOR DELETE
+TO authenticated
+USING (provider_id = auth.uid() AND status = 'pending');
+
+-- Admin oversight
+CREATE POLICY "Admin can view all maintenance quotes"
+ON public.maintenance_quotes
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
+
+-- Create technician_ratings table for maintenance service ratings
+CREATE TABLE public.technician_ratings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  technician_id UUID NOT NULL,
+  contractor_id UUID NOT NULL,
+  quote_id UUID REFERENCES public.maintenance_quotes(id) ON DELETE CASCADE,
+  request_id UUID REFERENCES public.maintenance_requests(id) ON DELETE CASCADE,
+  rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+  review TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+-- Enable RLS
+ALTER TABLE public.technician_ratings ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for technician_ratings
+CREATE POLICY "Anyone can view technician ratings"
+ON public.technician_ratings
+FOR SELECT
+USING (true);
+
+CREATE POLICY "Contractors can create ratings for their requests"
+ON public.technician_ratings
+FOR INSERT
+WITH CHECK (
+  contractor_id = auth.uid() AND
+  EXISTS (
+    SELECT 1 FROM public.maintenance_requests
+    WHERE id = request_id AND contractor_id = auth.uid()
+  )
+);
 
 -- Users can view their own subscription
 CREATE POLICY "Users can view their own subscription"
@@ -373,6 +658,17 @@ CREATE POLICY "Users can update their own subscription"
 ON public.subscriptions
 FOR UPDATE
 USING (auth.uid() = user_id);
+
+-- Admin oversight
+CREATE POLICY "Admin can view all subscriptions"
+ON public.subscriptions
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE POLICY "Admin can update all subscriptions"
+ON public.subscriptions
+FOR UPDATE
+USING (public.has_role(auth.uid(), 'admin'));
 
 -- Job requests policies
 CREATE POLICY "Anyone can view job requests"
@@ -396,6 +692,32 @@ CREATE POLICY "Workers can update job requests to accept"
   ON public.job_requests FOR UPDATE
                                         USING (status = 'open');
 
+CREATE POLICY "Workers can complete their accepted jobs"
+ON job_requests FOR UPDATE
+USING (
+  status = 'accepted'::job_status
+  AND accepted_by IN (
+    SELECT id FROM worker_profiles WHERE user_id = auth.uid()
+  )
+  AND has_role(auth.uid(), 'worker'::app_role)
+);
+
+-- Admin oversight
+CREATE POLICY "Admin can view all job requests"
+ON public.job_requests
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE POLICY "Admin can update all job requests"
+ON public.job_requests
+FOR UPDATE
+USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE POLICY "Admin can delete job requests"
+ON public.job_requests
+FOR DELETE
+USING (public.has_role(auth.uid(), 'admin'));
+
 -- Ratings policies
 CREATE POLICY "Anyone can view ratings"
   ON public.ratings FOR SELECT
@@ -414,6 +736,12 @@ CREATE POLICY "Contractors can create ratings"
     )
   );
 
+-- Admin oversight
+CREATE POLICY "Admin can view all ratings"
+ON public.ratings
+FOR SELECT
+USING (public.has_role(auth.uid(), 'admin'));
+
 -- RLS Policies for conversations
 CREATE POLICY "Users can view their own conversations"
   ON conversations
@@ -431,13 +759,25 @@ CREATE POLICY "Users can create conversations"
   FOR INSERT
   WITH CHECK (true);
 
+CREATE POLICY "Participants can update conversation"
+ON conversations FOR UPDATE
+TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM conversation_participants cp
+    WHERE cp.conversation_id = conversations.id
+    AND cp.user_id = auth.uid()
+  )
+);
+
 -- RLS Policies for conversation_participants
-CREATE POLICY "Users can view participants in their conversations"
-ON public.conversation_participants
-FOR SELECT
-USING (user_id = auth.uid() OR conversation_id IN (
-  SELECT conversation_id FROM public.conversation_participants WHERE user_id = auth.uid()
-));
+CREATE POLICY "Users can view conversation participants"
+ON conversation_participants FOR SELECT
+TO authenticated
+USING (
+  user_id = auth.uid() OR
+  conversation_id = '00000000-0000-0000-0000-000000000001'
+);
 
 CREATE POLICY "Users can join conversations"
   ON conversation_participants
@@ -477,6 +817,74 @@ CREATE POLICY "Users can update their own messages"
   ON messages
   FOR UPDATE
   USING (sender_id = auth.uid());
+
+-- Create message_reactions table for emoji reactions
+CREATE TABLE public.message_reactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  message_id UUID NOT NULL REFERENCES public.messages(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
+  emoji TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(message_id, user_id, emoji)
+);
+
+-- Enable RLS
+ALTER TABLE public.message_reactions ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for message_reactions
+CREATE POLICY "Users can view reactions on messages in their conversations"
+ON public.message_reactions FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM public.messages m
+    JOIN public.conversation_participants cp ON cp.conversation_id = m.conversation_id
+    WHERE m.id = message_reactions.message_id AND cp.user_id = auth.uid()
+  )
+);
+
+CREATE POLICY "Users can add reactions to messages in their conversations"
+ON public.message_reactions FOR INSERT
+WITH CHECK (
+  user_id = auth.uid() AND
+  EXISTS (
+    SELECT 1 FROM public.messages m
+    JOIN public.conversation_participants cp ON cp.conversation_id = m.conversation_id
+    WHERE m.id = message_reactions.message_id AND cp.user_id = auth.uid()
+  )
+);
+
+CREATE POLICY "Users can remove their own reactions"
+ON public.message_reactions FOR DELETE
+USING (user_id = auth.uid());
+
+-- Create notification_preferences table
+CREATE TABLE public.notification_preferences (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL UNIQUE,
+  push_enabled BOOLEAN DEFAULT true,
+  personal_messages BOOLEAN DEFAULT true,
+  general_chat BOOLEAN DEFAULT false,
+  job_updates BOOLEAN DEFAULT true,
+  maintenance_updates BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Enable RLS
+ALTER TABLE public.notification_preferences ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for notification_preferences
+CREATE POLICY "Users can view their own notification preferences"
+ON public.notification_preferences FOR SELECT
+USING (user_id = auth.uid());
+
+CREATE POLICY "Users can insert their own notification preferences"
+ON public.notification_preferences FOR INSERT
+WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Users can update their own notification preferences"
+ON public.notification_preferences FOR UPDATE
+USING (user_id = auth.uid());
 
 INSERT INTO conversations (id, created_at, updated_at, last_message_at)
 VALUES ('00000000-0000-0000-0000-000000000001', now(), now(), now())
@@ -637,6 +1045,7 @@ EXECUTE FUNCTION public.handle_updated_at();
 ALTER PUBLICATION supabase_realtime ADD TABLE messages;
 ALTER PUBLICATION supabase_realtime ADD TABLE conversations;
 ALTER PUBLICATION supabase_realtime ADD TABLE conversation_participants;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.message_reactions;
 
 -- Add all existing users to global conversation
 INSERT INTO conversation_participants (conversation_id, user_id)
